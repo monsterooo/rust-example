@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use serde_json::Result;
+
 /// 三个主要屏幕，Main 显示已存在的值屏幕，Editing 显示创建屏幕，Exiting 退出提示
 pub enum CurrentScreen {
     Main,
@@ -45,7 +48,7 @@ impl App {
                 CurrentlyEditing::Value => self.currently_editing = Some(CurrentlyEditing::Key),
             }
         } else {
-            self.currently_editing = CurrentlyEditing::Key;
+            self.currently_editing = Some(CurrentlyEditing::Key);
         }
     }
 
