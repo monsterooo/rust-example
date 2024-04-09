@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use color_eyre::eyre::{Ok, Result};
+use color_eyre::eyre::Result;
 use crossterm::{
     cursor,
     event::{
@@ -95,5 +95,99 @@ impl Tui {
         self
     }
 
-    pub fn start() {}
+    /// 开始运行通过tokio异步等待终端的事件
+    pub fn start(&mut self) {
+        let tick_delay = std::time::Duration::from_secs_f64(1.0 / self.tick_rate);
+        let render_delay = std::time::Duration::from_secs_f64(1.0 / self.frame_rate);
+        self.cancel();
+        self.cancellation_token = CancellationToken::new();
+        let _cancellation_token = self.cancellation_token.clone();
+        // event_tx 在 Tui::new 中初始化
+        let _event_tx = self.event_tx.clone();
+        self.task = tokio::spawn(async move {
+            let mut reader = crossterm::event::EventStream::new();
+            let mut tick_interval = tokio::time::interval(tick_delay);
+            let mut render_interval = tokio::time::interval(render_delay);
+            _event_tx.send(Event::Init).unwrap();
+            loop {
+                let tick_delay = tick_interval.tick();
+                let render_delay = render_interval.tick();
+                let crossterm_event = reader.next().fuse();
+
+                tokio::select! {
+                    _ = _cancellation_token.cancelled() => {
+                        break;
+                    }
+                    maybe_event = crossterm_event => {
+                        // 这里通过channel将终端事件通过异步发送
+                        match maybe_event {
+                            Some(Ok(evt)) => {
+                                match evt {
+                                    CrosstermEvent::Key(key) => {
+                                        if key.kind == KeyEventKind::Press {
+                                            _event_tx.send(Event::Key(key)).unwrap();
+                                        }
+                                    },
+                                    CrosstermEvent::Mouse(mouse) => {
+                                        _event_tx.send(Event::Mouse(mouse)).unwrap();
+                                    },
+                                    CrosstermEvent::Resize(x, y) => {
+                                        _event_tx.send(Event::Resize(x, y)).unwrap();
+                                    },
+                                    // 失去焦点
+                                    CrosstermEvent::FocusLost => {
+                                        _event_tx.send(Event::FocusLost).unwrap();
+                                    },
+                                    // 获取焦点
+                                    CrosstermEvent::FocusGained => {
+                                        _event_tx.send(Event::FocusGained).unwrap();
+                                    },
+                                    // 粘贴字符串
+                                    CrosstermEvent::Paste(s) => {
+                                        _event_tx.send(Event::Paste(s)).unwrap();
+                                    }
+                                }
+                            }
+                            Some(Err(_)) => {
+                                _event_tx.send(Event::Error).unwrap();
+                            },
+                            None => {}
+                        }
+                    }
+                    _ = tick_delay => {
+                        _event_tx.send(Event::Tick).unwrap();
+                    }
+                    _ = render_delay => {
+                        _event_tx.send(Event::Render).unwrap();
+                    }
+                }
+            }
+        });
+    }
+
+    /// 初始化终端配置
+    pub fn enter(&mut self) -> Result<()> {
+        crossterm::terminal::enable_raw_mode()?;
+        crossterm::execute!(std::io::stderr(), EnterAlternateScreen, cursor::Hide)?;
+
+        if self.mouse {
+            crossterm::execute!(std::io::stderr(), EnableMouseCapture)?;
+        }
+        if self.paste {
+            crossterm::execute!(std::io::stderr(), EnableBracketedPaste)?;
+        }
+
+        self.start();
+
+        Ok(())
+    }
+
+    pub fn cancel(&self) {}
+
+    pub async fn next(&mut self) -> Result<Event> {
+        self.event_rx
+            .recv()
+            .await // tokio 支持的功能将同步的channel转换为异步
+            .ok_or(color_eyre::eyre::eyre!("Unable to get event"))
+    }
 }
