@@ -182,7 +182,9 @@ impl Tui {
         Ok(())
     }
 
-    pub fn cancel(&self) {}
+    pub fn cancel(&self) {
+        self.cancellation_token.cancel();
+    }
 
     pub async fn next(&mut self) -> Result<Event> {
         self.event_rx
@@ -190,4 +192,60 @@ impl Tui {
             .await // tokio 支持的功能将同步的channel转换为异步
             .ok_or(color_eyre::eyre::eyre!("Unable to get event"))
     }
+
+    pub fn stop(&mut self) -> Result<()> {
+        self.cancel();
+        let mut counter = 0;
+        while !self.task.is_finished() {
+            std::thread::sleep(Duration::from_millis(1));
+            counter += 1;
+            if counter > 50 {
+                self.task.abort();
+            }
+            if counter > 100 {
+                println!("Failed to abort task in 100 milliseconds for unknown reason");
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn exit(&mut self) -> Result<()> {
+        self.stop()?;
+        if crossterm::terminal::is_raw_mode_enabled()? {
+            self.flush()?;
+            if self.paste {
+                crossterm::execute!(std::io::stderr(), DisableBracketedPaste)?;
+            }
+            if self.mouse {
+                crossterm::execute!(std::io::stderr(), DisableMouseCapture)?;
+            }
+            crossterm::execute!(
+                std::io::stderr(),
+                LeaveAlternateScreen,
+                cursor::Show
+            )?;
+            crossterm::terminal::disable_raw_mode()?;
+        }
+
+        Ok(())
+    }
 }
+
+impl Deref for Tui {
+    type Target = ratatui::Terminal<Backend<std::io::Stderr>>;
+    fn deref(&self) -> &Self::Target {
+        &self.terminal
+    }
+}
+
+impl DerefMut for Tui {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.terminal
+    }
+}
+
+// impl Drop for Tui {
+//     fn drop(&mut self) {
+//     }
+// }

@@ -34,17 +34,15 @@ fn get_action(_app: &App, event: Event) -> Action {
         Event::Error => Action::None,
         Event::Tick => Action::Tick,
         Event::Render => Action::Render,
-        Event::Key(key) => {
-            match key.code {
-                Char('j') => Action::Increment,
-                Char('k') => Action::Decrement,
-                Char('J') => Action::NetworkRequestAndThenIncrement,
-                Char('K') => Action::NetworkRequestAndThenDecrement,
-                Char('q') => Action::Quit,
-                _ => Action::None
-            }
+        Event::Key(key) => match key.code {
+            Char('j') => Action::Increment,
+            Char('k') => Action::Decrement,
+            Char('J') => Action::NetworkRequestAndThenIncrement,
+            Char('K') => Action::NetworkRequestAndThenDecrement,
+            Char('q') => Action::Quit,
+            _ => Action::None,
         },
-        _ => Action::None
+        _ => Action::None,
     }
 }
 
@@ -52,15 +50,47 @@ fn update(app: &mut App, action: Action) {
     match action {
         Action::Increment => {
             app.counter += 1;
-        },
+        }
         Action::Decrement => {
             app.counter -= 1;
-        },
+        }
         Action::NetworkRequestAndThenIncrement => {
             let tx = app.action_tx.clone();
-            tokio
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                tx.send(Action::Increment).unwrap();
+            });
         }
-    }
+        Action::NetworkRequestAndThenDecrement => {
+            let tx = app.action_tx.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                tx.send(Action::Decrement).unwrap();
+            });
+        }
+        Action::Quit => app.should_quit = true,
+        _ => {}
+    };
+}
+
+fn ui(f: &mut Frame, app: &mut App) {
+    let area = f.size();
+    f.render_widget(
+        Paragraph::new(format!(
+            "Preess j or k to increment or decrment. \n\n Counter: {}",
+            app.counter
+        ))
+        .block(
+            Block::default()
+                .title("ratatui async counter app")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        )
+        .style(Style::default().fg(Color::Cyan))
+        .alignment(Alignment::Center),
+        area,
+    )
 }
 
 async fn run() -> Result<()> {
@@ -72,7 +102,7 @@ async fn run() -> Result<()> {
     let mut app = App {
         counter: 0,
         should_quit: false,
-        action_tx: action_tx.clone()
+        action_tx: action_tx.clone(),
     };
 
     loop {
@@ -92,8 +122,18 @@ async fn run() -> Result<()> {
         while let Ok(action) = action_rx.try_recv() {
             // 应用程序更新
             update(&mut app, action.clone());
+            if let Action::Render = action {
+                tui.draw(|f| {
+                    ui(f, &mut app);
+                })?;
+            }
         }
-    } 
+        if app.should_quit {
+            break;
+        }
+    }
+
+    tui.exit()?;
 
     Ok(())
 }
